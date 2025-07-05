@@ -31,8 +31,16 @@ export class CheckerService {
         ? 'https://blockstream.info/api'
         : 'https://blockstream.info/testnet/api';
 
+    // TRON network
+    const tronNetwork = process.env.TRON_NETWORK;
+    const tronApiBase =
+      tronNetwork === 'mainnet'
+        ? 'https://api.trongrid.io'
+        : 'https://api.shasta.trongrid.io';
+
     this.logger.log(`Using ETH network: ${ethNetwork}, RPC: ${ethRpc}`);
     this.logger.log(`Using BTC network: ${btcNetwork}, API: ${btcApiBase}`);
+    this.logger.log(`Using TRON network: ${tronNetwork}, API: ${tronApiBase}`);
 
     for (const order of pendingOrders) {
       try {
@@ -49,12 +57,6 @@ export class CheckerService {
             const valueEth = parseFloat(ethers.formatEther(BigInt(tx.value)));
             const recipient = tx.to;
 
-            this.logger.log(`tx value -> ${tx.value}`);
-            this.logger.log(`Converted valueEth: ${valueEth}`);
-            this.logger.log(`Recipient from tx: ${recipient}`);
-            this.logger.log(`Recipient from DB: ${order.recipient}`);
-            this.logger.log(`AmountUsd from DB: ${order.amount}`);
-
             if (
               valueEth >= order.amount &&
               recipient.toLowerCase() === order.recipient.toLowerCase()
@@ -70,42 +72,56 @@ export class CheckerService {
         } else if (order.chain === 'btc') {
           const res = await axios.get(`${btcApiBase}/tx/${order.txHash}`);
           const tx = res.data;
-          console.log('tx btc -> ', tx);
 
-          if (tx && tx.vin && tx.vout) {
-            console.log('checkkking');
-            // Lấy sender address từ vin
-            const vinSender = tx.vin[0]?.prevout?.scriptpubkey_address;
+          const vinSender = tx.vin[0]?.prevout?.scriptpubkey_address;
+          const vout1 = tx.vout[1];
 
-            // Lấy vout (anh đang muốn check vout[1])
-            const vout1 = tx.vout[1];
+          if (vinSender && vout1) {
+            const recipientAddress = vout1.scriptpubkey_address;
+            const valueBtc = vout1.value / 1e8;
 
-            if (vinSender && vout1) {
-              const recipientAddress = vout1.scriptpubkey_address;
-              const valueBtc = vout1.value / 100000000;
+            if (
+              valueBtc === order.amount &&
+              vinSender.toLowerCase() === order.sender.toLowerCase() &&
+              recipientAddress.toLowerCase() === order.recipient.toLowerCase()
+            ) {
+              await this.ordersService.updateVerifyAndStatus(
+                order.orderId,
+                true,
+                'success',
+              );
+              this.logger.log(`BTC Order ${order.orderId} verified & success!`);
+            }
+          }
+        } else if (order.chain === 'trx') {
+          const res = await axios.get(
+            `https://apilist.tronscanapi.com/api/transaction-info?hash=${order.txHash}`,
+          );
+          const tx = res.data;
+          if (
+            tx &&
+            tx.trc20TransferInfo[0].to_address &&
+            tx.trc20TransferInfo[0].from_address &&
+            tx.contractData
+          ) {
+            const sender = tx.trc20TransferInfo[0].from_address;
+            const recipient = tx.trc20TransferInfo[0].to_address;
+            const valueTrx = tx.trc20TransferInfo[0].amount_str / 1e6; // TRX 6 decimals
+            console.log('sender->', sender);
+            console.log('recipient->', recipient);
+            console.log('valueTrx->', valueTrx);
 
-              this.logger.log(`Sender from vin: ${vinSender}`);
-              this.logger.log(`Recipient from vout[1]: ${recipientAddress}`);
-              this.logger.log(`Value (BTC): ${valueBtc}`);
-              this.logger.log(`Order sender: ${order.sender}`);
-              this.logger.log(`Order recipient: ${order.recipient}`);
-              this.logger.log(`Order amount: ${order.amount}`);
-
-              if (
-                valueBtc === order.amount &&
-                vinSender.toLowerCase() === order.sender.toLowerCase() &&
-                recipientAddress.toLowerCase() === order.recipient.toLowerCase()
-              ) {
-                console.log('checkkking verify');
-                await this.ordersService.updateVerifyAndStatus(
-                  order.orderId,
-                  true,
-                  'success',
-                );
-                this.logger.log(
-                  `BTC Order ${order.orderId} verified & success!`,
-                );
-              }
+            if (
+              valueTrx === order.amount &&
+              sender.toLowerCase() === order.sender.toLowerCase() &&
+              recipient.toLowerCase() === order.recipient.toLowerCase()
+            ) {
+              await this.ordersService.updateVerifyAndStatus(
+                order.orderId,
+                true,
+                'success',
+              );
+              this.logger.log(`TRX Order ${order.orderId} verified & success!`);
             }
           }
         }
