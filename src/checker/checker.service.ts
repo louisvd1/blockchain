@@ -10,7 +10,7 @@ export class CheckerService {
 
   constructor(private ordersService: OrdersService) {}
 
-  @Cron('*/20 * * * * *') // mỗi 20s
+  @Cron('*/10 * * * * *') // mỗi 20s
   async handleCheck() {
     this.logger.log('Checking orders...');
 
