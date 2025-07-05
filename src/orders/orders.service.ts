@@ -19,4 +19,30 @@ export class OrdersService {
   async updateStatus(orderId: string, status: string, txHash?: string) {
     return this.orderModel.updateOne({ orderId }, { status, txHash });
   }
+
+  async findUnverifiedOrders() {
+    return this.orderModel.find({ verify: false }).exec();
+  }
+
+  async updateVerifyAndStatus(
+    orderId: string,
+    verify: boolean,
+    status: string,
+  ) {
+    console.log(
+      'Updating order:',
+      orderId,
+      'verify:',
+      verify,
+      'status:',
+      status,
+    );
+
+    const updated = await this.orderModel
+      .findOneAndUpdate({ orderId }, { verify, status }, { new: true })
+      .exec();
+
+    console.log('Updated order:', updated);
+    return updated;
+  }
 }

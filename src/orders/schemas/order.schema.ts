@@ -8,7 +8,10 @@ export class Order extends Document {
   orderId: string;
 
   @Prop()
-  walletAddress: string;
+  sender: string;
+
+  @Prop()
+  recipient: string;
 
   @Prop()
   chain: string; // eth, btc, tron
@@ -24,6 +27,9 @@ export class Order extends Document {
 
   @Prop()
   txHash: string;
+
+  @Prop({ default: false })
+  verify: boolean;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
