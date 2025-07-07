@@ -23,23 +23,16 @@ export class CheckerService {
         ? 'https://mainnet.infura.io/v3/your_project_id'
         : 'https://ethereum-sepolia.publicnode.com';
 
-    if (!ethRpc || !/^https?:\/\//.test(ethRpc)) {
-      throw new Error(`Invalid ETH RPC URL: ${ethRpc}`);
-    }
-
     const bnbRpc =
       process.env.BNB_NETWORK === 'mainnet'
         ? 'https://bsc-dataseed.binance.org/'
         : 'https://data-seed-prebsc-1-s1.binance.org:8545/';
 
-    if (!bnbRpc || !/^https?:\/\//.test(bnbRpc)) {
-      throw new Error(`Invalid BNB RPC URL: ${bnbRpc}`);
-    }
-
     const btcApiBase =
       process.env.BTC_NETWORK === 'mainnet'
         ? 'https://blockstream.info/api'
         : 'https://blockstream.info/testnet/api';
+
     const tronApiBase =
       process.env.TRON_NETWORK === 'mainnet'
         ? 'https://api.trongrid.io'
@@ -50,9 +43,29 @@ export class CheckerService {
         let result = false;
 
         if (order.chain === 'eth') {
-          result = await this.checkEthOrBnb(order, ethRpc, 'ETH');
+          if (order.token === 'USDT') {
+            result = await this.checkERC20(
+              order,
+              ethRpc,
+              'ETH',
+              order.recipient,
+              order.amount,
+            );
+          } else {
+            result = await this.checkNative(order, ethRpc, 'ETH');
+          }
         } else if (order.chain === 'bnb') {
-          result = await this.checkEthOrBnb(order, bnbRpc, 'BNB');
+          if (order.token === 'USDT') {
+            result = await this.checkERC20(
+              order,
+              bnbRpc,
+              'BNB',
+              order.recipient,
+              order.amount,
+            );
+          } else {
+            result = await this.checkNative(order, bnbRpc, 'BNB');
+          }
         } else if (order.chain === 'btc') {
           result = await this.checkBTC(order, btcApiBase);
         } else if (order.chain === 'trx') {
@@ -103,27 +116,20 @@ export class CheckerService {
     }
   }
 
-  private async checkEthOrBnb(
+  private async checkNative(
     order: any,
     rpc: string,
     chainName: string,
   ): Promise<boolean> {
     const txRes = await this.fetchWithRetry(() =>
-      axios.post(
-        rpc,
-        {
-          jsonrpc: '2.0',
-          method: 'eth_getTransactionByHash',
-          params: [order.txHash],
-          id: 1,
-        },
-        { timeout: 5000 },
-      ),
+      axios.post(rpc, {
+        jsonrpc: '2.0',
+        method: 'eth_getTransactionByHash',
+        params: [order.txHash],
+        id: 1,
+      }),
     );
-    console.log('txRes->', txRes);
     const tx = txRes.data.result;
-
-    console.log('tx->', tx);
     if (!tx || !tx.to || !tx.value) {
       this.logger.warn(
         `[${chainName}] Missing tx fields: ${JSON.stringify(tx)}`,
@@ -141,16 +147,12 @@ export class CheckerService {
     this.logger.debug(`[${chainName}] expected recipient: ${order.recipient}`);
 
     const receiptRes = await this.fetchWithRetry(() =>
-      axios.post(
-        rpc,
-        {
-          jsonrpc: '2.0',
-          method: 'eth_getTransactionReceipt',
-          params: [order.txHash],
-          id: 1,
-        },
-        { timeout: 5000 },
-      ),
+      axios.post(rpc, {
+        jsonrpc: '2.0',
+        method: 'eth_getTransactionReceipt',
+        params: [order.txHash],
+        id: 1,
+      }),
     );
     const receipt = receiptRes.data.result;
     if (!receipt || !receipt.blockNumber) {
@@ -162,6 +164,66 @@ export class CheckerService {
       value >= order.amount &&
       recipient.toLowerCase() === order.recipient.toLowerCase()
     );
+  }
+
+  private async checkERC20(
+    order: any,
+    rpc: string,
+    chainName: string,
+    expectedRecipient: string,
+    expectedAmount: number,
+  ): Promise<boolean> {
+    const receiptRes = await this.fetchWithRetry(() =>
+      axios.post(rpc, {
+        jsonrpc: '2.0',
+        method: 'eth_getTransactionReceipt',
+        params: [order.txHash],
+        id: 1,
+      }),
+    );
+
+    const receipt = receiptRes.data.result;
+    if (!receipt || !receipt.logs || receipt.logs.length === 0) {
+      this.logger.warn(`[${chainName}] No logs found in receipt`);
+      return false;
+    }
+
+    const transferEventSig =
+      '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+    for (const log of receipt.logs) {
+      if (log.topics[0] === transferEventSig) {
+        const from = '0x' + log.topics[1].substring(26);
+        const to = '0x' + log.topics[2].substring(26);
+        const amount = BigInt(log.data);
+
+        this.logger.debug(`[ERC20 ${chainName}] txHash: ${order.txHash}`);
+        this.logger.debug(`[ERC20 ${chainName}] from: ${from}`);
+        this.logger.debug(`[ERC20 ${chainName}] to: ${to}`);
+        this.logger.debug(
+          `[ERC20 ${chainName}] amount raw: ${amount.toString()}`,
+        );
+
+        // USDT decimals = 6
+        const normalizedAmount = ethers.formatUnits(amount.toString(), 18);
+
+        console.log('normalizedAmount', normalizedAmount);
+        console.log('to.toLowerCase()', to.toLowerCase());
+        console.log(
+          'expectedRecipient.toLowerCase()',
+          expectedRecipient.toLowerCase(),
+        );
+        console.log('expectedAmount', expectedAmount);
+
+        if (
+          to.toLowerCase() === expectedRecipient.toLowerCase() &&
+          Number(normalizedAmount) === expectedAmount
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private async checkBTC(order: any, apiBase: string): Promise<boolean> {
