@@ -20,7 +20,7 @@ export class CheckerService {
 
     const ethRpc =
       process.env.ETH_NETWORK === 'mainnet'
-        ? 'https://mainnet.infura.io/v3/your_project_id' // <- thay ID thật của bạn
+        ? 'https://mainnet.infura.io/v3/your_project_id'
         : 'https://ethereum-sepolia.publicnode.com';
 
     if (!ethRpc || !/^https?:\/\//.test(ethRpc)) {
