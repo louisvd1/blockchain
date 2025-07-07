@@ -30,6 +30,9 @@ export class Order extends Document {
 
   @Prop({ default: false })
   verify: boolean;
+
+  @Prop({ default: null })
+  lastCheckedAt: Date;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

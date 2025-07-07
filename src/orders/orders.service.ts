@@ -20,8 +20,17 @@ export class OrdersService {
     return this.orderModel.updateOne({ orderId }, { status, txHash });
   }
 
-  async findUnverifiedOrders() {
-    return this.orderModel.find({ verify: false }).exec();
+  async findUnverifiedOrders(limit = 10) {
+    const X = 10; // Giãn cách kiểm tra lại 10 giây
+    const cutoff = new Date(Date.now() - X * 1000);
+    return this.orderModel
+      .find({
+        verify: false,
+        $or: [{ lastCheckedAt: { $lt: cutoff } }, { lastCheckedAt: null }],
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .exec();
   }
 
   async updateVerifyAndStatus(
@@ -29,20 +38,20 @@ export class OrdersService {
     verify: boolean,
     status: string,
   ) {
-    console.log(
-      'Updating order:',
-      orderId,
-      'verify:',
-      verify,
-      'status:',
-      status,
-    );
-
     const updated = await this.orderModel
-      .findOneAndUpdate({ orderId }, { verify, status }, { new: true })
+      .findOneAndUpdate(
+        { orderId },
+        { verify, status, lastCheckedAt: new Date() },
+        { new: true },
+      )
       .exec();
 
-    console.log('Updated order:', updated);
     return updated;
+  }
+
+  async updateLastCheckedAt(orderId: string) {
+    await this.orderModel
+      .updateOne({ orderId }, { lastCheckedAt: new Date() })
+      .exec();
   }
 }

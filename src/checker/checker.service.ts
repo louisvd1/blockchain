@@ -10,28 +10,25 @@ export class CheckerService {
 
   constructor(private ordersService: OrdersService) {}
 
-  @Cron('*/10 * * * * *') // mỗi 20s
+  @Cron('*/3 * * * * *') // mỗi 3s
   async handleCheck() {
     this.logger.log('Checking orders...');
 
-    const pendingOrders = await this.ordersService.findUnverifiedOrders();
+    const pendingOrders = await this.ordersService.findUnverifiedOrders(10); // lấy batch 10
     this.logger.log(`Found ${pendingOrders.length} pending orders`);
 
-    // ETH network
     const ethNetwork = process.env.ETH_NETWORK;
     const ethRpc =
       ethNetwork === 'mainnet'
         ? (process.env.ETH_RPC_MAINNET ?? '')
         : (process.env.ETH_RPC_TESTNET ?? '');
 
-    // BTC network
     const btcNetwork = process.env.BTC_NETWORK;
     const btcApiBase =
       btcNetwork === 'mainnet'
         ? 'https://blockstream.info/api'
         : 'https://blockstream.info/testnet/api';
 
-    // TRON network
     const tronNetwork = process.env.TRON_NETWORK;
     const tronApiBase =
       tronNetwork === 'mainnet'
@@ -67,6 +64,7 @@ export class CheckerService {
                 'success',
               );
               this.logger.log(`ETH Order ${order.orderId} verified & success!`);
+              continue; // skip update lastCheckedAt vì đã update trong updateVerifyAndStatus
             }
           }
         } else if (order.chain === 'btc') {
@@ -91,6 +89,7 @@ export class CheckerService {
                 'success',
               );
               this.logger.log(`BTC Order ${order.orderId} verified & success!`);
+              continue;
             }
           }
         } else if (order.chain === 'trx') {
@@ -106,10 +105,7 @@ export class CheckerService {
           ) {
             const sender = tx.trc20TransferInfo[0].from_address;
             const recipient = tx.trc20TransferInfo[0].to_address;
-            const valueTrx = tx.trc20TransferInfo[0].amount_str / 1e6; // TRX 6 decimals
-            console.log('sender->', sender);
-            console.log('recipient->', recipient);
-            console.log('valueTrx->', valueTrx);
+            const valueTrx = tx.trc20TransferInfo[0].amount_str / 1e6;
 
             if (
               valueTrx === order.amount &&
@@ -122,13 +118,19 @@ export class CheckerService {
                 'success',
               );
               this.logger.log(`TRX Order ${order.orderId} verified & success!`);
+              continue;
             }
           }
         }
+
+        // Nếu chưa success => update lastCheckedAt
+        await this.ordersService.updateLastCheckedAt(order.orderId);
       } catch (e) {
         this.logger.error(
           `Check failed for order ${order.orderId}: ${e.message}`,
         );
+        // Vẫn update lastCheckedAt để lần sau không bị quét ngay
+        await this.ordersService.updateLastCheckedAt(order.orderId);
       }
     }
   }
