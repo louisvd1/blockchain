@@ -10,11 +10,11 @@ export class CheckerService {
 
   constructor(private ordersService: OrdersService) {}
 
-  @Cron('*/3 * * * * *') // mỗi 3s
+  @Cron('*/3 * * * * *')
   async handleCheck() {
     this.logger.log('Checking orders...');
 
-    const pendingOrders = await this.ordersService.findUnverifiedOrders(10); // lấy batch 10
+    const pendingOrders = await this.ordersService.findUnverifiedOrders(10);
     this.logger.log(`Found ${pendingOrders.length} pending orders`);
 
     const ethNetwork = process.env.ETH_NETWORK;
@@ -35,9 +35,16 @@ export class CheckerService {
         ? 'https://api.trongrid.io'
         : 'https://api.shasta.trongrid.io';
 
+    const bnbNetwork = process.env.BNB_NETWORK;
+    const bnbRpc =
+      bnbNetwork === 'mainnet'
+        ? (process.env.BNB_RPC_MAINNET ?? '')
+        : (process.env.BNB_RPC_TESTNET ?? '');
+
     this.logger.log(`Using ETH network: ${ethNetwork}, RPC: ${ethRpc}`);
     this.logger.log(`Using BTC network: ${btcNetwork}, API: ${btcApiBase}`);
     this.logger.log(`Using TRON network: ${tronNetwork}, API: ${tronApiBase}`);
+    this.logger.log(`Using BNB network: ${bnbNetwork}, RPC: ${bnbRpc}`);
 
     for (const order of pendingOrders) {
       try {
@@ -64,7 +71,7 @@ export class CheckerService {
                 'success',
               );
               this.logger.log(`ETH Order ${order.orderId} verified & success!`);
-              continue; // skip update lastCheckedAt vì đã update trong updateVerifyAndStatus
+              continue;
             }
           }
         } else if (order.chain === 'btc') {
@@ -121,15 +128,39 @@ export class CheckerService {
               continue;
             }
           }
+        } else if (order.chain === 'bnb') {
+          const res = await axios.post(bnbRpc, {
+            jsonrpc: '2.0',
+            method: 'eth_getTransactionByHash',
+            params: [order.txHash],
+            id: 1,
+          });
+
+          const tx = res.data.result;
+          if (tx && tx.to && tx.value) {
+            const valueBnb = parseFloat(ethers.formatEther(BigInt(tx.value)));
+            const recipient = tx.to;
+
+            if (
+              valueBnb >= order.amount &&
+              recipient.toLowerCase() === order.recipient.toLowerCase()
+            ) {
+              await this.ordersService.updateVerifyAndStatus(
+                order.orderId,
+                true,
+                'success',
+              );
+              this.logger.log(`BNB Order ${order.orderId} verified & success!`);
+              continue;
+            }
+          }
         }
 
-        // Nếu chưa success => update lastCheckedAt
         await this.ordersService.updateLastCheckedAt(order.orderId);
       } catch (e) {
         this.logger.error(
           `Check failed for order ${order.orderId}: ${e.message}`,
         );
-        // Vẫn update lastCheckedAt để lần sau không bị quét ngay
         await this.ordersService.updateLastCheckedAt(order.orderId);
       }
     }
