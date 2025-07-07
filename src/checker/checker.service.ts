@@ -18,184 +18,212 @@ export class CheckerService {
     const pendingOrders = await this.ordersService.findUnverifiedOrders(limit);
     this.logger.log(`Found ${pendingOrders.length} pending orders`);
 
-    const ethNetwork = process.env.ETH_NETWORK;
     const ethRpc =
-      ethNetwork === 'mainnet'
-        ? (process.env.ETH_RPC_MAINNET ?? '')
-        : (process.env.ETH_RPC_TESTNET ?? '');
+      process.env.ETH_NETWORK === 'mainnet'
+        ? 'https://mainnet.infura.io/v3/your_project_id' // <- thay ID thật của bạn
+        : 'https://ethereum-sepolia.publicnode.com';
 
-    const btcNetwork = process.env.BTC_NETWORK;
+    if (!ethRpc || !/^https?:\/\//.test(ethRpc)) {
+      throw new Error(`Invalid ETH RPC URL: ${ethRpc}`);
+    }
+
+    const bnbRpc =
+      process.env.BNB_NETWORK === 'mainnet'
+        ? 'https://bsc-dataseed.binance.org/'
+        : 'https://data-seed-prebsc-1-s1.binance.org:8545/';
+
+    if (!bnbRpc || !/^https?:\/\//.test(bnbRpc)) {
+      throw new Error(`Invalid BNB RPC URL: ${bnbRpc}`);
+    }
+
     const btcApiBase =
-      btcNetwork === 'mainnet'
+      process.env.BTC_NETWORK === 'mainnet'
         ? 'https://blockstream.info/api'
         : 'https://blockstream.info/testnet/api';
-
-    const tronNetwork = process.env.TRON_NETWORK;
     const tronApiBase =
-      tronNetwork === 'mainnet'
+      process.env.TRON_NETWORK === 'mainnet'
         ? 'https://api.trongrid.io'
         : 'https://api.shasta.trongrid.io';
 
-    const bnbNetwork = process.env.BNB_NETWORK;
-    const bnbRpc =
-      bnbNetwork === 'mainnet'
-        ? (process.env.BNB_RPC_MAINNET ?? '')
-        : (process.env.BNB_RPC_TESTNET ?? '');
-
-    this.logger.log(`Using ETH RPC: ${ethRpc}`);
-    this.logger.log(`Using BTC API: ${btcApiBase}`);
-    this.logger.log(`Using TRON API: ${tronApiBase}`);
-    this.logger.log(`Using BNB RPC: ${bnbRpc}`);
-
     for (const order of pendingOrders) {
       try {
-        if (order.chain === 'eth' || order.chain === 'bnb') {
-          const rpc = order.chain === 'eth' ? ethRpc : bnbRpc;
+        let result = false;
 
-          const res = await axios.post(rpc, {
-            jsonrpc: '2.0',
-            method: 'eth_getTransactionByHash',
-            params: [order.txHash],
-            id: 1,
-          });
-
-          const tx = res.data.result;
-          if (!tx || !tx.to || !tx.value) {
-            await this.ordersService.updateLastCheckedAt(order.orderId);
-            continue;
-          }
-
-          const value = parseFloat(ethers.formatEther(BigInt(tx.value)));
-          const recipient = tx.to;
-
-          // Check receipt để confirm
-          const receiptRes = await axios.post(rpc, {
-            jsonrpc: '2.0',
-            method: 'eth_getTransactionReceipt',
-            params: [order.txHash],
-            id: 1,
-          });
-          const receipt = receiptRes.data.result;
-
-          if (!receipt || !receipt.blockNumber) {
-            await this.ordersService.updateLastCheckedAt(order.orderId);
-            continue;
-          }
-
-          if (
-            value >= order.amount &&
-            recipient.toLowerCase() === order.recipient.toLowerCase()
-          ) {
-            await this.ordersService.updateVerifyAndStatus(
-              order.orderId,
-              true,
-              'success',
-            );
-            this.logger.log(
-              `${order.chain.toUpperCase()} Order ${order.orderId} verified & success!`,
-            );
-            continue;
-          } else {
-            await this.ordersService.updateVerifyAndStatus(
-              order.orderId,
-              false,
-              'failed',
-            );
-            this.logger.warn(
-              `${order.chain.toUpperCase()} Order ${order.orderId} verify failed (value or recipient mismatch)!`,
-            );
-            continue;
-          }
+        if (order.chain === 'eth') {
+          result = await this.checkEthOrBnb(order, ethRpc, 'ETH');
+        } else if (order.chain === 'bnb') {
+          result = await this.checkEthOrBnb(order, bnbRpc, 'BNB');
         } else if (order.chain === 'btc') {
-          const res = await axios.get(`${btcApiBase}/tx/${order.txHash}`);
-          const tx = res.data;
-
-          const vinSender = tx.vin[0]?.prevout?.scriptpubkey_address;
-          const vout1 = tx.vout[1];
-
-          if (!vinSender || !vout1) {
-            await this.ordersService.updateLastCheckedAt(order.orderId);
-            continue;
-          }
-
-          const recipientAddress = vout1.scriptpubkey_address;
-          const valueBtc = vout1.value / 1e8;
-
-          if (
-            valueBtc === order.amount &&
-            vinSender.toLowerCase() === order.sender.toLowerCase() &&
-            recipientAddress.toLowerCase() === order.recipient.toLowerCase()
-          ) {
-            await this.ordersService.updateVerifyAndStatus(
-              order.orderId,
-              true,
-              'success',
-            );
-            this.logger.log(`BTC Order ${order.orderId} verified & success!`);
-            continue;
-          } else {
-            await this.ordersService.updateVerifyAndStatus(
-              order.orderId,
-              false,
-              'failed',
-            );
-            this.logger.warn(
-              `BTC Order ${order.orderId} verify failed (value or recipient mismatch)!`,
-            );
-            continue;
-          }
+          result = await this.checkBTC(order, btcApiBase);
         } else if (order.chain === 'trx') {
-          const res = await axios.get(
-            `${tronApiBase}/v1/transaction-info?hash=${order.txHash}`,
-          );
-          const tx = res.data;
-
-          if (
-            tx &&
-            tx.trc20TransferInfo &&
-            tx.trc20TransferInfo[0]?.to_address &&
-            tx.trc20TransferInfo[0]?.from_address
-          ) {
-            const sender = tx.trc20TransferInfo[0].from_address;
-            const recipient = tx.trc20TransferInfo[0].to_address;
-            const valueTrx = tx.trc20TransferInfo[0].amount_str / 1e6;
-
-            if (
-              valueTrx === order.amount &&
-              sender.toLowerCase() === order.sender.toLowerCase() &&
-              recipient.toLowerCase() === order.recipient.toLowerCase()
-            ) {
-              await this.ordersService.updateVerifyAndStatus(
-                order.orderId,
-                true,
-                'success',
-              );
-              this.logger.log(`TRX Order ${order.orderId} verified & success!`);
-              continue;
-            } else {
-              await this.ordersService.updateVerifyAndStatus(
-                order.orderId,
-                false,
-                'failed',
-              );
-              this.logger.warn(
-                `TRX Order ${order.orderId} verify failed (value or recipient mismatch)!`,
-              );
-              continue;
-            }
-          } else {
-            await this.ordersService.updateLastCheckedAt(order.orderId);
-            continue;
-          }
+          result = await this.checkTRX(order, tronApiBase);
         }
 
-        await this.ordersService.updateLastCheckedAt(order.orderId);
+        if (result) {
+          await this.ordersService.updateVerifyAndStatus(
+            order.orderId,
+            true,
+            'success',
+          );
+          this.logger.log(
+            `${order.chain.toUpperCase()} Order ${order.orderId} verified & success!`,
+          );
+        } else {
+          await this.ordersService.updateVerifyAndStatus(
+            order.orderId,
+            false,
+            'failed',
+          );
+          this.logger.warn(
+            `${order.chain.toUpperCase()} Order ${order.orderId} verify failed!`,
+          );
+        }
       } catch (e) {
         this.logger.error(
           `Check failed for order ${order.orderId}: ${e.message}`,
         );
+      } finally {
         await this.ordersService.updateLastCheckedAt(order.orderId);
       }
     }
+  }
+
+  private async fetchWithRetry(
+    fn: () => Promise<any>,
+    retries = 2,
+  ): Promise<any> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (retries <= 0) throw error;
+      this.logger.warn(
+        `Retrying... Remaining: ${retries}, Error: ${error.message}`,
+      );
+      return this.fetchWithRetry(fn, retries - 1);
+    }
+  }
+
+  private async checkEthOrBnb(
+    order: any,
+    rpc: string,
+    chainName: string,
+  ): Promise<boolean> {
+    const txRes = await this.fetchWithRetry(() =>
+      axios.post(
+        rpc,
+        {
+          jsonrpc: '2.0',
+          method: 'eth_getTransactionByHash',
+          params: [order.txHash],
+          id: 1,
+        },
+        { timeout: 5000 },
+      ),
+    );
+    console.log('txRes->', txRes);
+    const tx = txRes.data.result;
+
+    console.log('tx->', tx);
+    if (!tx || !tx.to || !tx.value) {
+      this.logger.warn(
+        `[${chainName}] Missing tx fields: ${JSON.stringify(tx)}`,
+      );
+      return false;
+    }
+
+    const value = parseFloat(ethers.formatEther(BigInt(tx.value)));
+    const recipient = tx.to;
+
+    this.logger.debug(`[${chainName}] txHash: ${order.txHash}`);
+    this.logger.debug(`[${chainName}] value: ${value}`);
+    this.logger.debug(`[${chainName}] recipient: ${recipient}`);
+    this.logger.debug(`[${chainName}] expected amount: ${order.amount}`);
+    this.logger.debug(`[${chainName}] expected recipient: ${order.recipient}`);
+
+    const receiptRes = await this.fetchWithRetry(() =>
+      axios.post(
+        rpc,
+        {
+          jsonrpc: '2.0',
+          method: 'eth_getTransactionReceipt',
+          params: [order.txHash],
+          id: 1,
+        },
+        { timeout: 5000 },
+      ),
+    );
+    const receipt = receiptRes.data.result;
+    if (!receipt || !receipt.blockNumber) {
+      this.logger.warn(`[${chainName}] No receipt or no block confirmed yet`);
+      return false;
+    }
+
+    return (
+      value >= order.amount &&
+      recipient.toLowerCase() === order.recipient.toLowerCase()
+    );
+  }
+
+  private async checkBTC(order: any, apiBase: string): Promise<boolean> {
+    const res = await this.fetchWithRetry(() =>
+      axios.get(`${apiBase}/tx/${order.txHash}`, { timeout: 5000 }),
+    );
+    const tx = res.data;
+
+    const vinSender = tx.vin[0]?.prevout?.scriptpubkey_address;
+    const vout1 = tx.vout[1];
+
+    this.logger.debug(`[BTC] txHash: ${order.txHash}`);
+    this.logger.debug(`[BTC] vin sender: ${vinSender}`);
+    this.logger.debug(`[BTC] vout1 recipient: ${vout1?.scriptpubkey_address}`);
+    this.logger.debug(`[BTC] vout1 value: ${vout1?.value / 1e8}`);
+    this.logger.debug(`[BTC] expected amount: ${order.amount}`);
+    this.logger.debug(`[BTC] expected recipient: ${order.recipient}`);
+    this.logger.debug(`[BTC] expected sender: ${order.sender}`);
+
+    if (!vinSender || !vout1) return false;
+
+    const recipientAddress = vout1.scriptpubkey_address;
+    const valueBtc = vout1.value / 1e8;
+
+    return (
+      valueBtc === order.amount &&
+      vinSender.toLowerCase() === order.sender.toLowerCase() &&
+      recipientAddress.toLowerCase() === order.recipient.toLowerCase()
+    );
+  }
+
+  private async checkTRX(order: any, apiBase: string): Promise<boolean> {
+    const res = await this.fetchWithRetry(() =>
+      axios.get(`${apiBase}/v1/transaction-info?hash=${order.txHash}`, {
+        timeout: 5000,
+      }),
+    );
+    const tx = res.data;
+
+    if (!tx || !tx.trc20TransferInfo || !tx.trc20TransferInfo[0]) {
+      this.logger.warn(
+        `[TRX] Missing trc20TransferInfo: ${JSON.stringify(tx)}`,
+      );
+      return false;
+    }
+
+    const sender = tx.trc20TransferInfo[0].from_address;
+    const recipient = tx.trc20TransferInfo[0].to_address;
+    const valueTrx = tx.trc20TransferInfo[0].amount_str / 1e6;
+
+    this.logger.debug(`[TRX] txHash: ${order.txHash}`);
+    this.logger.debug(`[TRX] value: ${valueTrx}`);
+    this.logger.debug(`[TRX] sender: ${sender}`);
+    this.logger.debug(`[TRX] recipient: ${recipient}`);
+    this.logger.debug(`[TRX] expected amount: ${order.amount}`);
+    this.logger.debug(`[TRX] expected sender: ${order.sender}`);
+    this.logger.debug(`[TRX] expected recipient: ${order.recipient}`);
+
+    return (
+      valueTrx === order.amount &&
+      sender.toLowerCase() === order.sender.toLowerCase() &&
+      recipient.toLowerCase() === order.recipient.toLowerCase()
+    );
   }
 }
