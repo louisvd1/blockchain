@@ -1,4 +1,3 @@
-// src/orders/orders.service.ts
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -10,6 +9,27 @@ export class OrdersService {
 
   async create(orderData: Partial<Order>): Promise<Order> {
     return this.orderModel.create(orderData);
+  }
+
+  async findAll(): Promise<Order[]> {
+    return this.orderModel.find().exec();
+  }
+
+  async findByOrderId(orderId: string): Promise<Order | null> {
+    return this.orderModel.findOne({ orderId }).exec();
+  }
+
+  async updateOrder(
+    orderId: string,
+    updateData: Partial<Order>,
+  ): Promise<Order | null> {
+    return this.orderModel
+      .findOneAndUpdate({ orderId }, updateData, { new: true })
+      .exec();
+  }
+
+  async deleteOrder(orderId: string): Promise<any> {
+    return this.orderModel.deleteOne({ orderId }).exec();
   }
 
   async findPendingOrders(chain: string): Promise<Order[]> {
@@ -38,15 +58,13 @@ export class OrdersService {
     verify: boolean,
     status: string,
   ) {
-    const updated = await this.orderModel
+    return this.orderModel
       .findOneAndUpdate(
         { orderId },
         { verify, status, lastCheckedAt: new Date() },
         { new: true },
       )
       .exec();
-
-    return updated;
   }
 
   async updateLastCheckedAt(orderId: string) {

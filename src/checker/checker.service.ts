@@ -40,7 +40,7 @@ export class CheckerService {
 
     for (const order of pendingOrders) {
       try {
-        let result = false;
+        let result: boolean | null = false;
 
         if (order.chain === 'eth') {
           if (order.token === 'USDT') {
@@ -72,7 +72,7 @@ export class CheckerService {
           result = await this.checkTRX(order, tronApiBase);
         }
 
-        if (result) {
+        if (result === true) {
           await this.ordersService.updateVerifyAndStatus(
             order.orderId,
             true,
@@ -81,15 +81,28 @@ export class CheckerService {
           this.logger.log(
             `${order.chain.toUpperCase()} Order ${order.orderId} verified & success!`,
           );
-        } else {
-          await this.ordersService.updateVerifyAndStatus(
-            order.orderId,
-            false,
-            'failed',
-          );
-          this.logger.warn(
-            `${order.chain.toUpperCase()} Order ${order.orderId} verify failed!`,
-          );
+        } else if (result === false) {
+          // Chỉ fail nếu quá thời gian max hoặc điều kiện thất bại
+          const createdAt = new Date(order.timestamp);
+          const now = new Date();
+          const diffMinutes =
+            (now.getTime() - createdAt.getTime()) / (1000 * 60);
+          const maxPendingMinutes = 60; // ví dụ: cho phép pending tối đa 60 phút
+
+          if (diffMinutes > maxPendingMinutes) {
+            await this.ordersService.updateVerifyAndStatus(
+              order.orderId,
+              false,
+              'failed',
+            );
+            this.logger.warn(
+              `${order.chain.toUpperCase()} Order ${order.orderId} verify failed (timeout)!`,
+            );
+          } else {
+            this.logger.log(
+              `${order.chain.toUpperCase()} Order ${order.orderId} still pending, waiting...`,
+            );
+          }
         }
       } catch (e) {
         this.logger.error(
@@ -120,7 +133,7 @@ export class CheckerService {
     order: any,
     rpc: string,
     chainName: string,
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     const txRes = await this.fetchWithRetry(() =>
       axios.post(rpc, {
         jsonrpc: '2.0',
@@ -130,12 +143,7 @@ export class CheckerService {
       }),
     );
     const tx = txRes.data.result;
-    if (!tx || !tx.to || !tx.value) {
-      this.logger.warn(
-        `[${chainName}] Missing tx fields: ${JSON.stringify(tx)}`,
-      );
-      return false;
-    }
+    if (!tx || !tx.to || !tx.value) return false;
 
     const value = parseFloat(ethers.formatEther(BigInt(tx.value)));
     const recipient = tx.to;
@@ -156,8 +164,8 @@ export class CheckerService {
     );
     const receipt = receiptRes.data.result;
     if (!receipt || !receipt.blockNumber) {
-      this.logger.warn(`[${chainName}] No receipt or no block confirmed yet`);
-      return false;
+      this.logger.log(`[${chainName}] No receipt yet, tx still pending`);
+      return null;
     }
 
     return (
@@ -172,7 +180,7 @@ export class CheckerService {
     chainName: string,
     expectedRecipient: string,
     expectedAmount: number,
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     const receiptRes = await this.fetchWithRetry(() =>
       axios.post(rpc, {
         jsonrpc: '2.0',
@@ -183,10 +191,7 @@ export class CheckerService {
     );
 
     const receipt = receiptRes.data.result;
-    if (!receipt || !receipt.logs || receipt.logs.length === 0) {
-      this.logger.warn(`[${chainName}] No logs found in receipt`);
-      return false;
-    }
+    if (!receipt || !receipt.logs || receipt.logs.length === 0) return false;
 
     const transferEventSig =
       '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -205,24 +210,22 @@ export class CheckerService {
         );
 
         // USDT decimals = 6
-        const normalizedAmount = ethers.formatUnits(amount.toString(), 18);
-
-        console.log('normalizedAmount', normalizedAmount);
-        console.log('to.toLowerCase()', to.toLowerCase());
-        console.log(
-          'expectedRecipient.toLowerCase()',
-          expectedRecipient.toLowerCase(),
-        );
-        console.log('expectedAmount', expectedAmount);
+        const normalizedAmount = parseFloat(ethers.formatUnits(amount, 6));
 
         if (
           to.toLowerCase() === expectedRecipient.toLowerCase() &&
-          Number(normalizedAmount) === expectedAmount
+          normalizedAmount === expectedAmount
         ) {
           return true;
         }
       }
     }
+
+    if (!receipt.blockNumber) {
+      this.logger.log(`[ERC20 ${chainName}] No block yet, tx still pending`);
+      return null;
+    }
+
     return false;
   }
 
@@ -263,12 +266,7 @@ export class CheckerService {
     );
     const tx = res.data;
 
-    if (!tx || !tx.trc20TransferInfo || !tx.trc20TransferInfo[0]) {
-      this.logger.warn(
-        `[TRX] Missing trc20TransferInfo: ${JSON.stringify(tx)}`,
-      );
-      return false;
-    }
+    if (!tx || !tx.trc20TransferInfo || !tx.trc20TransferInfo[0]) return false;
 
     const sender = tx.trc20TransferInfo[0].from_address;
     const recipient = tx.trc20TransferInfo[0].to_address;
