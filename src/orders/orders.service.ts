@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Order } from './schemas/order.schema';
@@ -8,6 +8,14 @@ export class OrdersService {
   constructor(@InjectModel(Order.name) private orderModel: Model<Order>) {}
 
   async create(orderData: Partial<Order>): Promise<Order> {
+    const existed = await this.orderModel
+      .findOne({ orderId: orderData.orderId })
+      .exec();
+    if (existed) {
+      throw new BadRequestException(
+        `Order with orderId "${orderData.orderId}" already exists`,
+      );
+    }
     return this.orderModel.create(orderData);
   }
 
@@ -33,7 +41,7 @@ export class OrdersService {
   }
 
   async findPendingOrders(chain: string): Promise<Order[]> {
-    return this.orderModel.find({ chain, status: 'pending' }).exec();
+    return this.orderModel.find({ chain, status: 'paid' }).exec();
   }
 
   async updateStatus(orderId: string, status: string, txHash?: string) {
@@ -46,10 +54,17 @@ export class OrdersService {
     return this.orderModel
       .find({
         verify: false,
+        status: 'paid',
         $or: [{ lastCheckedAt: { $lt: cutoff } }, { lastCheckedAt: null }],
       })
       .sort({ createdAt: 1 })
       .limit(limit)
+      .exec();
+  }
+
+  async submitPayment(orderId: string, txHash: string): Promise<Order | null> {
+    return this.orderModel
+      .findOneAndUpdate({ orderId }, { txHash, status: 'paid' }, { new: true })
       .exec();
   }
 

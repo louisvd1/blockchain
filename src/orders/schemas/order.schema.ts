@@ -33,6 +33,9 @@ export class Order extends Document {
 
   @Prop({ default: () => Date.now() })
   timestamp: Date;
+
+  @Prop({ type: Object })
+  orderDetail;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

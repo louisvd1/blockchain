@@ -17,7 +17,40 @@ export class OrdersController {
 
   @Post()
   @ApiOperation({ summary: 'Create a new order' })
-  @ApiBody({ description: 'Order data', type: Object })
+  @ApiBody({
+    description: 'Order data',
+    schema: {
+      type: 'object',
+      properties: {
+        orderId: { type: 'string', example: '12311123123' },
+        sender: {
+          type: 'string',
+          example: '0xD72dBC29DE22f169489129aF154526feF0dc0353',
+        },
+        recipient: {
+          type: 'string',
+          example: '0xb848b708ED9EB70c56877A56e0fFA7510b9e38ca',
+        },
+        chain: { type: 'string', example: 'bnb' },
+        amount: { type: 'number', example: 0.00001 },
+        token: { type: 'string', example: 'BNB' },
+        status: { type: 'string', example: 'pending' },
+        verify: { type: 'boolean', example: false },
+        orderDetail: {
+          type: 'object',
+          example: {
+            productName: 'iPhone 15 Pro',
+            quantity: 1,
+            price: 1500,
+            customerName: 'John Doe',
+            phone: '+123456789',
+            address: '123 Main St, New York, USA',
+            note: 'Deliver before weekend',
+          },
+        },
+      },
+    },
+  })
   async createOrder(@Body() body) {
     return this.ordersService.create(body);
   }
@@ -48,5 +81,23 @@ export class OrdersController {
   @ApiParam({ name: 'orderId', type: String })
   async deleteOrder(@Param('orderId') orderId: string) {
     return this.ordersService.deleteOrder(orderId);
+  }
+
+  @Post('/payment')
+  @ApiOperation({ summary: 'Submit txHash for payment' })
+  @ApiBody({
+    description: 'Payment info',
+    schema: {
+      type: 'object',
+      properties: {
+        orderId: { type: 'string' },
+        txHash: { type: 'string' },
+      },
+      required: ['orderId', 'txHash'],
+    },
+  })
+  async paymentOrder(@Body() body) {
+    const { orderId, txHash } = body;
+    return this.ordersService.submitPayment(orderId, txHash);
   }
 }
