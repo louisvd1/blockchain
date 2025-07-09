@@ -2,21 +2,72 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Order } from './schemas/order.schema';
+import * as QRCode from 'qrcode';
 
 @Injectable()
 export class OrdersService {
   constructor(@InjectModel(Order.name) private orderModel: Model<Order>) {}
 
   async create(orderData: Partial<Order>): Promise<Order> {
-    const existed = await this.orderModel
+    if (!orderData.recipient || !orderData.amount || !orderData.chain) {
+      throw new Error('Recipient, amount, and chain are required');
+    }
+
+    const existing = await this.orderModel
       .findOne({ orderId: orderData.orderId })
       .exec();
-    if (existed) {
-      throw new BadRequestException(
-        `Order with orderId "${orderData.orderId}" already exists`,
-      );
+    if (existing) {
+      throw new Error('OrderId already exists!');
     }
-    return this.orderModel.create(orderData);
+
+    // Tạo order trước, chưa có QR
+    const createdOrder = await this.orderModel.create(orderData);
+
+    // Tạo QR code
+    const qrUrl = await this.generateQrByChain(
+      createdOrder.chain,
+      createdOrder.recipient,
+      createdOrder.amount,
+    );
+
+    // Gọi update để thêm field paymentQr
+    const updatedOrder = (await this.orderModel
+      .findByIdAndUpdate(createdOrder._id, { paymentQr: qrUrl }, { new: true })
+      .exec()) as Order;
+
+    return updatedOrder;
+  }
+
+  async generateQrByChain(
+    chain: string,
+    recipient: string,
+    amount: number,
+  ): Promise<string> {
+    let uri = '';
+
+    switch (chain) {
+      case 'eth':
+        const amountWei = BigInt(Math.floor(amount * 1e18)).toString();
+        uri = `ethereum:${recipient}?value=${amountWei}`;
+        break;
+
+      case 'bnb':
+        uri = `bnb:${recipient}?amount=${amount}`;
+        break;
+
+      case 'btc':
+        uri = `bitcoin:${recipient}?amount=${amount}`;
+        break;
+
+      case 'trx':
+        uri = `tron:${recipient}?amount=${amount}`;
+        break;
+
+      default:
+        throw new Error(`Unsupported chain: ${chain}`);
+    }
+
+    return QRCode.toDataURL(uri);
   }
 
   async findAll(): Promise<Order[]> {
@@ -63,9 +114,26 @@ export class OrdersService {
   }
 
   async submitPayment(orderId: string, txHash: string): Promise<Order | null> {
-    return this.orderModel
+    // Check nếu đã tồn tại order khác có cùng txHash
+    const existingOrder = await this.orderModel.findOne({
+      txHash,
+      orderId: { $ne: orderId },
+    });
+
+    if (existingOrder) {
+      throw new Error('Transaction hash already used in another order');
+    }
+
+    // Nếu chưa tồn tại, thì update
+    const updatedOrder = await this.orderModel
       .findOneAndUpdate({ orderId }, { txHash, status: 'paid' }, { new: true })
       .exec();
+
+    if (!updatedOrder) {
+      throw new Error('Order not found');
+    }
+
+    return updatedOrder;
   }
 
   async updateVerifyAndStatus(

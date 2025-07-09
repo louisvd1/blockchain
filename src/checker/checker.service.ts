@@ -16,7 +16,7 @@ export class CheckerService {
 
     const limit = parseInt(process.env.ORDER_CHECK_LIMIT ?? '10', 10);
     const pendingOrders = await this.ordersService.findUnverifiedOrders(limit);
-    this.logger.log(`Found ${pendingOrders.length} pending orders`);
+    this.logger.log(`Found ${pendingOrders.length} paid orders`);
 
     const ethRpc =
       process.env.ETH_NETWORK === 'mainnet'
@@ -195,7 +195,6 @@ export class CheckerService {
 
     const transferEventSig =
       '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-
     for (const log of receipt.logs) {
       if (log.topics[0] === transferEventSig) {
         const from = '0x' + log.topics[1].substring(26);

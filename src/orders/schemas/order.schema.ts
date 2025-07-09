@@ -36,6 +36,9 @@ export class Order extends Document {
 
   @Prop({ type: Object })
   orderDetail;
+
+  @Prop()
+  paymentQr: string;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
