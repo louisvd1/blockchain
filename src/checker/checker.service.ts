@@ -72,6 +72,7 @@ export class CheckerService {
         } else if (order.chain === 'btc') {
           result = await this.checkBTC(order, btcApiBase);
         } else if (order.chain === 'trx') {
+          console.log(tronApiBase, 'tronApiBase');
           result = await this.checkTRX(order, tronApiBase);
         }
 
@@ -262,15 +263,32 @@ export class CheckerService {
 
   private async checkTRX(order: any, apiBase: string): Promise<boolean> {
     const txRes = await this.fetchWithRetry(() =>
-      axios.post(`${apiBase}/wallet/gettransactionbyid`, {
-        value: order.txHash,
-      }),
+      axios.post(
+        `${apiBase}/wallet/gettransactionbyid`,
+        {
+          value: order.txHash,
+        },
+        {
+          headers: {
+            'TRON-PRO-API-KEY': process.env.TRON_API_KEY_MAINNET,
+          },
+        },
+      ),
     );
+    console.log(`${apiBase}/wallet/gettransactionbyid`);
 
     const infoRes = await this.fetchWithRetry(() =>
-      axios.post(`${apiBase}/wallet/gettransactioninfobyid`, {
-        value: order.txHash,
-      }),
+      axios.post(
+        `${apiBase}/wallet/gettransactioninfobyid`,
+        {
+          value: order.txHash,
+        },
+        {
+          headers: {
+            'TRON-PRO-API-KEY': process.env.TRON_API_KEY_MAINNET,
+          },
+        },
+      ),
     );
 
     const tx = txRes.data;
