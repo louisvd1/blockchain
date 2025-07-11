@@ -239,26 +239,38 @@ export class CheckerService {
     const tx = res.data;
 
     const vinSender = tx.vin[0]?.prevout?.scriptpubkey_address;
-    const vout1 = tx.vout[1];
+    if (!vinSender) return false;
 
-    this.logger.debug(`[BTC] txHash: ${order.txHash}`);
-    this.logger.debug(`[BTC] vin sender: ${vinSender}`);
-    this.logger.debug(`[BTC] vout1 recipient: ${vout1?.scriptpubkey_address}`);
-    this.logger.debug(`[BTC] vout1 value: ${vout1?.value / 1e8}`);
-    this.logger.debug(`[BTC] expected amount: ${order.amount}`);
-    this.logger.debug(`[BTC] expected recipient: ${order.recipient}`);
-    this.logger.debug(`[BTC] expected sender: ${order.sender}`);
+    let matchedRecipient = false;
+    let matchedAmount = false;
 
-    if (!vinSender || !vout1) return false;
+    for (const vout of tx.vout) {
+      const recipientAddress = vout.scriptpubkey_address;
+      const valueBtc = vout.value / 1e8;
 
-    const recipientAddress = vout1.scriptpubkey_address;
-    const valueBtc = vout1.value / 1e8;
+      this.logger.debug(`[BTC] txHash: ${order.txHash}`);
+      this.logger.debug(`[BTC] vin sender: ${vinSender}`);
+      this.logger.debug(`[BTC] checking vout recipient: ${recipientAddress}`);
+      this.logger.debug(`[BTC] vout value: ${valueBtc}`);
+      this.logger.debug(`[BTC] expected amount: ${order.amount}`);
+      this.logger.debug(`[BTC] expected recipient: ${order.recipient}`);
+      this.logger.debug(`[BTC] expected sender: ${order.sender}`);
 
-    return (
-      valueBtc === order.amount &&
-      vinSender.toLowerCase() === order.sender.toLowerCase() &&
-      recipientAddress.toLowerCase() === order.recipient.toLowerCase()
-    );
+      if (
+        recipientAddress &&
+        recipientAddress.toLowerCase() === order.recipient.toLowerCase() &&
+        valueBtc === order.amount
+      ) {
+        matchedRecipient = true;
+        matchedAmount = true;
+        break;
+      }
+    }
+
+    const matchedSender =
+      vinSender.toLowerCase() === order.sender.toLowerCase();
+
+    return matchedRecipient && matchedAmount && matchedSender;
   }
 
   private async checkTRX(order: any, apiBase: string): Promise<boolean> {
