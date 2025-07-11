@@ -3,6 +3,9 @@ import { Cron } from '@nestjs/schedule';
 import { OrdersService } from '../orders/orders.service';
 import { ethers } from 'ethers';
 import axios from 'axios';
+import bs58 from 'bs58';
+import { createHash } from 'crypto';
+import TronWeb from 'tronweb';
 
 @Injectable()
 export class CheckerService {
@@ -258,21 +261,42 @@ export class CheckerService {
   }
 
   private async checkTRX(order: any, apiBase: string): Promise<boolean> {
-    const res = await this.fetchWithRetry(() =>
-      axios.get(`${apiBase}/v1/transaction-info?hash=${order.txHash}`, {
-        timeout: 5000,
+    const txRes = await this.fetchWithRetry(() =>
+      axios.post(`${apiBase}/wallet/gettransactionbyid`, {
+        value: order.txHash,
       }),
     );
-    const tx = res.data;
 
-    if (!tx || !tx.trc20TransferInfo || !tx.trc20TransferInfo[0]) return false;
+    const infoRes = await this.fetchWithRetry(() =>
+      axios.post(`${apiBase}/wallet/gettransactioninfobyid`, {
+        value: order.txHash,
+      }),
+    );
 
-    const sender = tx.trc20TransferInfo[0].from_address;
-    const recipient = tx.trc20TransferInfo[0].to_address;
-    const valueTrx = tx.trc20TransferInfo[0].amount_str / 1e6;
+    const tx = txRes.data;
+    const info = infoRes.data;
+
+    if (!tx || !info || !info.receipt || !info.log || info.log.length === 0) {
+      this.logger.warn(`[TRX] Missing transaction data or logs`);
+      return false;
+    }
+
+    const log = info.log.find((l) => l.topics && l.topics.length > 2);
+    if (!log) return false;
+
+    const fromHex = log.topics[1].slice(-40);
+    const toHex = log.topics[2].slice(-40);
+
+    const fromHexWith41 = '41' + fromHex;
+    const toHexWith41 = '41' + toHex;
+
+    const sender = TronWeb.utils.address.fromHex(fromHexWith41);
+    const recipient = TronWeb.utils.address.fromHex(toHexWith41);
+
+    const value = Number(BigInt('0x' + log.data) / 10n ** 6n);
 
     this.logger.debug(`[TRX] txHash: ${order.txHash}`);
-    this.logger.debug(`[TRX] value: ${valueTrx}`);
+    this.logger.debug(`[TRX] value: ${value}`);
     this.logger.debug(`[TRX] sender: ${sender}`);
     this.logger.debug(`[TRX] recipient: ${recipient}`);
     this.logger.debug(`[TRX] expected amount: ${order.amount}`);
@@ -280,7 +304,7 @@ export class CheckerService {
     this.logger.debug(`[TRX] expected recipient: ${order.recipient}`);
 
     return (
-      valueTrx === order.amount &&
+      value === order.amount &&
       sender.toLowerCase() === order.sender.toLowerCase() &&
       recipient.toLowerCase() === order.recipient.toLowerCase()
     );

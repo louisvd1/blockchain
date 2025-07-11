@@ -29,9 +29,13 @@
     "@nestjs/swagger": "^11.2.0",
     "axios": "^1.10.0",
     "bitcoinjs-lib": "^6.1.7",
+    "bs58": "^6.0.0",
+    "crypto": "^1.0.1",
     "delay": "^6.0.0",
     "ethers": "^6.15.0",
+    "js-sha3": "^0.9.3",
     "mongoose": "^8.16.1",
+    "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "tronweb": "^6.0.3"
