@@ -233,86 +233,56 @@ export class CheckerService {
 
   private async checkBTC(order: any, alchemyBase: string): Promise<boolean> {
     try {
-      console.log('checkBTCcheckBTC');
-      const rawRes = await this.fetchWithRetry(() =>
-        axios.post(
-          `${alchemyBase}`,
-          {
-            id: 1,
-            jsonrpc: '2.0',
-            method: 'getrawtransaction',
-            params: [
-              [order.txHash], // tx hash của bitcoin trả ra
-              false,
-              '000000000000000000013c7104486ef1aa53e8ac99b8a8ac02a113b58457ed8b', // blockhash
-            ],
-          },
-          {
-            headers: { 'Content-Type': 'application/json' },
-          },
-        ),
+      const address = order.recipient;
+      const blockstreamBase = 'https://blockstream.info/api';
+
+      const txListRes = await axios.get(
+        `${blockstreamBase}/address/${address}/txs`,
       );
-      console.log('rawRes->', rawRes);
+      const transactions = txListRes.data;
 
-      const rawHex = rawRes.data.result;
-      if (!rawHex) {
-        this.logger.warn(
-          `[BTC] Cannot get raw transaction for txHash ${order.txHash}`,
-        );
-        return false;
-      }
+      for (const tx of transactions) {
+        const txid = tx.txid;
 
-      // Step 2: Decode raw transaction
-      const decodeRes = await this.fetchWithRetry(() =>
-        axios.post(
-          `${alchemyBase}`,
-          {
-            id: 2,
-            jsonrpc: '2.0',
-            method: 'decoderawtransaction',
-            params: [rawHex, true],
-          },
-          {
-            headers: { 'Content-Type': 'application/json' },
-          },
-        ),
-      );
+        const rawRes = await axios.post(alchemyBase, {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getrawtransaction',
+          params: [txid, false],
+        });
 
-      const decoded = decodeRes.data.result;
-      if (!decoded) {
-        this.logger.warn(`[BTC] Failed to decode transaction ${order.txHash}`);
-        return false;
-      }
+        const rawHex = rawRes.data.result;
+        if (!rawHex) continue;
 
-      const vinSender = decoded.vin?.[0]?.address ?? '';
-      let matchedRecipient = false;
-      let matchedAmount = false;
+        const decodeRes = await axios.post(alchemyBase, {
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'decoderawtransaction',
+          params: [rawHex],
+        });
 
-      for (const vout of decoded.vout) {
-        const recipientAddress = vout.scriptPubKey?.address;
-        const valueBtc = parseFloat(vout.value);
+        const decoded = decodeRes.data.result;
 
-        this.logger.debug(`[BTC] txHash: ${order.txHash}`);
-        this.logger.debug(`[BTC] checking vout recipient: ${recipientAddress}`);
-        this.logger.debug(`[BTC] vout value: ${valueBtc}`);
-        this.logger.debug(`[BTC] expected amount: ${order.amount}`);
-        this.logger.debug(`[BTC] expected recipient: ${order.recipient}`);
-        this.logger.debug(`[BTC] expected sender: ${order.sender}`);
+        const vouts = decoded.vout;
+        const vins = decoded.vin;
 
-        if (
-          recipientAddress?.toLowerCase() === order.recipient.toLowerCase() &&
-          valueBtc === order.amount
-        ) {
-          matchedRecipient = true;
-          matchedAmount = true;
-          break;
+        for (const vout of vouts) {
+          const value = parseFloat(vout.value);
+          const to = vout.scriptPubKey?.address;
+
+          const vinAddress = vins?.[0]?.address;
+          const match =
+            to?.toLowerCase() === order.recipient.toLowerCase() &&
+            value === order.amount &&
+            (!order.sender ||
+              vinAddress?.toLowerCase() === order.sender.toLowerCase());
+
+          if (match) {
+            return true;
+          }
         }
       }
-
-      const matchedSender =
-        vinSender?.toLowerCase() === order.sender.toLowerCase();
-
-      return matchedRecipient && matchedAmount && matchedSender;
+      return false;
     } catch (e) {
       this.logger.error(
         `[BTC] Error checking transaction ${order.txHash}: ${e.message}`,
@@ -320,7 +290,6 @@ export class CheckerService {
       return false;
     }
   }
-
   private async checkTRX(order: any, apiBase: string): Promise<boolean> {
     const txRes = await this.fetchWithRetry(() =>
       axios.post(
