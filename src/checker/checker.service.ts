@@ -31,10 +31,8 @@ export class CheckerService {
         ? 'https://bsc-dataseed.binance.org/'
         : 'https://data-seed-prebsc-1-s1.binance.org:8545/';
 
-    const btcApiBase =
-      process.env.BTC_NETWORK === 'mainnet'
-        ? 'https://blockstream.info/api'
-        : 'https://blockstream.info/testnet/api';
+    const btcApiBase = 'https://bitcoin-mainnet.g.alchemy.com/v2/YOUR_API_KEY';
+    const btcApiBaseDemo = 'https://bitcoin-mainnet.g.alchemy.com/v2/docs-demo';
 
     const tronApiBase =
       process.env.TRON_NETWORK === 'mainnet'
@@ -70,6 +68,7 @@ export class CheckerService {
             result = await this.checkNative(order, bnbRpc, 'BNB');
           }
         } else if (order.chain === 'btc') {
+          console.log('bbbbb');
           result = await this.checkBTC(order, btcApiBase);
         } else if (order.chain === 'trx') {
           console.log(tronApiBase, 'tronApiBase');
@@ -232,45 +231,94 @@ export class CheckerService {
     return false;
   }
 
-  private async checkBTC(order: any, apiBase: string): Promise<boolean> {
-    const res = await this.fetchWithRetry(() =>
-      axios.get(`${apiBase}/tx/${order.txHash}`, { timeout: 5000 }),
-    );
-    const tx = res.data;
+  private async checkBTC(order: any, alchemyBase: string): Promise<boolean> {
+    try {
+      console.log('checkBTCcheckBTC');
+      const rawRes = await this.fetchWithRetry(() =>
+        axios.post(
+          `${alchemyBase}`,
+          {
+            id: 1,
+            jsonrpc: '2.0',
+            method: 'getrawtransaction',
+            params: [
+              [order.txHash], // tx hash của bitcoin trả ra
+              false,
+              '000000000000000000013c7104486ef1aa53e8ac99b8a8ac02a113b58457ed8b', // blockhash
+            ],
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      );
+      console.log('rawRes->', rawRes);
 
-    const vinSender = tx.vin[0]?.prevout?.scriptpubkey_address;
-    if (!vinSender) return false;
-
-    let matchedRecipient = false;
-    let matchedAmount = false;
-
-    for (const vout of tx.vout) {
-      const recipientAddress = vout.scriptpubkey_address;
-      const valueBtc = vout.value / 1e8;
-
-      this.logger.debug(`[BTC] txHash: ${order.txHash}`);
-      this.logger.debug(`[BTC] vin sender: ${vinSender}`);
-      this.logger.debug(`[BTC] checking vout recipient: ${recipientAddress}`);
-      this.logger.debug(`[BTC] vout value: ${valueBtc}`);
-      this.logger.debug(`[BTC] expected amount: ${order.amount}`);
-      this.logger.debug(`[BTC] expected recipient: ${order.recipient}`);
-      this.logger.debug(`[BTC] expected sender: ${order.sender}`);
-
-      if (
-        recipientAddress &&
-        recipientAddress.toLowerCase() === order.recipient.toLowerCase() &&
-        valueBtc === order.amount
-      ) {
-        matchedRecipient = true;
-        matchedAmount = true;
-        break;
+      const rawHex = rawRes.data.result;
+      if (!rawHex) {
+        this.logger.warn(
+          `[BTC] Cannot get raw transaction for txHash ${order.txHash}`,
+        );
+        return false;
       }
+
+      // Step 2: Decode raw transaction
+      const decodeRes = await this.fetchWithRetry(() =>
+        axios.post(
+          `${alchemyBase}`,
+          {
+            id: 2,
+            jsonrpc: '2.0',
+            method: 'decoderawtransaction',
+            params: [rawHex, true],
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      );
+
+      const decoded = decodeRes.data.result;
+      if (!decoded) {
+        this.logger.warn(`[BTC] Failed to decode transaction ${order.txHash}`);
+        return false;
+      }
+
+      const vinSender = decoded.vin?.[0]?.address ?? '';
+      let matchedRecipient = false;
+      let matchedAmount = false;
+
+      for (const vout of decoded.vout) {
+        const recipientAddress = vout.scriptPubKey?.address;
+        const valueBtc = parseFloat(vout.value);
+
+        this.logger.debug(`[BTC] txHash: ${order.txHash}`);
+        this.logger.debug(`[BTC] checking vout recipient: ${recipientAddress}`);
+        this.logger.debug(`[BTC] vout value: ${valueBtc}`);
+        this.logger.debug(`[BTC] expected amount: ${order.amount}`);
+        this.logger.debug(`[BTC] expected recipient: ${order.recipient}`);
+        this.logger.debug(`[BTC] expected sender: ${order.sender}`);
+
+        if (
+          recipientAddress?.toLowerCase() === order.recipient.toLowerCase() &&
+          valueBtc === order.amount
+        ) {
+          matchedRecipient = true;
+          matchedAmount = true;
+          break;
+        }
+      }
+
+      const matchedSender =
+        vinSender?.toLowerCase() === order.sender.toLowerCase();
+
+      return matchedRecipient && matchedAmount && matchedSender;
+    } catch (e) {
+      this.logger.error(
+        `[BTC] Error checking transaction ${order.txHash}: ${e.message}`,
+      );
+      return false;
     }
-
-    const matchedSender =
-      vinSender.toLowerCase() === order.sender.toLowerCase();
-
-    return matchedRecipient && matchedAmount && matchedSender;
   }
 
   private async checkTRX(order: any, apiBase: string): Promise<boolean> {
